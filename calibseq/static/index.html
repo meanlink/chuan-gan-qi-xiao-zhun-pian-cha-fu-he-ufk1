@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>校准分组序贯判定</title>
+<style>
+  :root {
+    --bg: #f4f6f9; --card: #ffffff; --ink: #1c2733; --muted: #66788a;
+    --line: #dde4ec; --accent: #1f6feb; --ok: #1a7f37; --warn: #b35900;
+    --bad: #c0392b; --chip: #eef2f7;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+         background: var(--bg); color: var(--ink); font-size: 14px; }
+  header { background: #10233f; color: #fff; padding: 14px 22px; }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 4px 0 0; font-size: 12px; color: #9fb3cc; }
+  main { display: grid; grid-template-columns: 360px 1fr; gap: 14px; padding: 14px; align-items: start; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: 14px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 10px; font-size: 15px; }
+  .card h3 { margin: 14px 0 6px; font-size: 13px; color: var(--muted); }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input, select, textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--line);
+    border-radius: 6px; font: inherit; background: #fff; }
+  textarea { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  button { padding: 6px 14px; border: 0; border-radius: 6px; background: var(--accent);
+           color: #fff; cursor: pointer; font: inherit; }
+  button.ghost { background: var(--chip); color: var(--ink); }
+  button.warn { background: var(--warn); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 5px 7px; border-bottom: 1px solid var(--line); text-align: left;
+           white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
+  .b-open { background: #e3edff; color: #1f6feb; }
+  .b-rel  { background: #dcf5e3; color: var(--ok); }
+  .b-man  { background: #fdeeda; color: var(--warn); }
+  .b-pass { background: #dcf5e3; color: var(--ok); }
+  .b-cont { background: #e3edff; color: #1f6feb; }
+  .b-sealed { background: #f3e8ff; color: #6f42c1; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .grow { flex: 1; }
+  .msg { margin-top: 8px; font-size: 12.5px; white-space: pre-wrap; }
+  .msg.err { color: var(--bad); }
+  .case-item { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+               margin-bottom: 6px; cursor: pointer; }
+  .case-item:hover { border-color: var(--accent); }
+  .case-item.sel { border-color: var(--accent); background: #f0f6ff; }
+  .zone-row { display: grid; grid-template-columns: 1fr 1.2fr 1fr 1fr 28px; gap: 6px; margin-bottom: 6px; }
+  .run { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+  .run-head { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  .hint { font-size: 12px; color: var(--muted); }
+  .scroll { overflow-x: auto; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>校准分组序贯判定</h1>
+  <p>开案固定各温区容差、每轮累计样本量与整案误放风险上限；各轮各温区均分整案风险（Bonferroni）。
+     所有温区齐量才判定：各温区置信区间全落容差内则放行，否则加测，末轮未过转人工复校。
+     判定按封存读数裁决，定案后拒绝补报，中断可按封存读数恢复。</p>
+</header>
+<main>
+  <div>
+    <section class="card" id="create-card">
+      <h2>开案</h2>
+      <label>案件名称</label>
+      <input id="c-name" value="T-24 探头批次校准复核">
+      <label>整案误放风险上限 α（各轮各温区共用）</label>
+      <input id="c-risk" type="number" min="0.000001" max="0.5" step="0.005" value="0.05">
+      <label>每轮累计样本量（每温区，逗号分隔，严格递增）</label>
+      <input id="c-rounds" value="5,10,15">
+      <label>温区容差</label>
+      <div id="zones"></div>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost" id="add-zone">＋温区</button>
+        <div class="grow"></div>
+        <button id="create-btn">开案</button>
+      </div>
+      <div class="msg" id="create-msg"></div>
+    </section>
+    <section class="card">
+      <h2>案件列表</h2>
+      <div id="case-list"><span class="muted">暂无案件</span></div>
+    </section>
+  </div>
+  <div id="detail"><section class="card"><span class="muted">请选择或创建一个案件。</span></section></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = x => {
+  if (x === null || x === undefined) return '—';
+  const n = Number(x);
+  if (!Number.isFinite(n)) return String(x);
+  const a = Math.abs(n);
+  if (a !== 0 && (a < 1e-4 || a >= 1e6)) return n.toExponential(3);
+  return String(Number(n.toFixed(6)));
+};
+const fmtA = x => Number(x).toPrecision(3);
+
+async function api(path, method = 'GET', body) {
+  const resp = await fetch(path, {
+    method,
+    headers: {'Content-Type': 'application/json'},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    const e = (data && data.error) || {};
+    const err = new Error(e.message || ('HTTP ' + resp.status));
+    err.code = e.code; err.status = resp.status;
+    throw err;
+  }
+  return data;
+}
+
+const STATUS_TEXT = {OPEN: '进行中', RELEASED: '已放行', MANUAL_REVIEW: '转人工复校'};
+const STATUS_CLS = {OPEN: 'b-open', RELEASED: 'b-rel', MANUAL_REVIEW: 'b-man'};
+const DEC_TEXT = {PASS: '放行', CONTINUE: '加测', MANUAL_REVIEW: '转人工复校'};
+const DEC_CLS = {PASS: 'b-pass', CONTINUE: 'b-cont', MANUAL_REVIEW: 'b-man'};
+const badge = (text, cls) => `<span class="badge ${cls}">${esc(text)}</span>`;
+
+let selectedId = null;
+let lastDetail = null;
+
+/* ------------------------------------------------------------ 开案表单 */
+function zoneRow(zid = '', name = '', lo = '', hi = '') {
+  const div = document.createElement('div');
+  div.className = 'zone-row';
+  div.innerHTML =
+    `<input placeholder="编号" value="${esc(zid)}">` +
+    `<input placeholder="名称" value="${esc(name)}">` +
+    `<input placeholder="下限" type="number" step="any" value="${esc(lo)}">` +
+    `<input placeholder="上限" type="number" step="any" value="${esc(hi)}">` +
+    `<button class="ghost" title="删除">×</button>`;
+  div.querySelector('button').onclick = () => div.remove();
+  $('#zones').appendChild(div);
+}
+$('#add-zone').onclick = () => zoneRow();
+zoneRow('LOW', '低温', '-0.5', '0.5');
+zoneRow('MID', '常温', '-0.5', '0.5');
+zoneRow('HIGH', '高温', '-0.6', '0.6');
+
+$('#create-btn').onclick = async () => {
+  const msg = $('#create-msg');
+  msg.className = 'msg'; msg.textContent = '';
+  try {
+    const rounds = $('#c-rounds').value.split(/[,，\s]+/).filter(Boolean).map(Number);
+    const zones = [...document.querySelectorAll('#zones .zone-row')].map(r => {
+      const [id, nm, lo, hi] = r.querySelectorAll('input');
+      return {zone_id: id.value.trim() || undefined, name: nm.value.trim() || undefined,
+              lower: Number(lo.value), upper: Number(hi.value)};
+    });
+    if (!zones.length) throw new Error('至少一个温区');
+    const kase = await api('/api/cases', 'POST', {
+      name: $('#c-name').value,
+      overall_risk: Number($('#c-risk').value),
+      zones, rounds,
+    });
+    msg.textContent = `已开案 ${kase.code}`;
+    selectedId = kase.id;
+    await refresh();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = e.message;
+  }
+};
+
+/* ------------------------------------------------------------ 列表 */
+async function loadList() {
+  const {cases} = await api('/api/cases');
+  const box = $('#case-list');
+  if (!cases.length) { box.innerHTML = '<span class="muted">暂无案件</span>'; return; }
+  box.innerHTML = cases.map(c =>
+    `<div class="case-item ${c.id === selectedId ? 'sel' : ''}" data-id="${c.id}">
+       <div class="row"><b>${esc(c.code)}</b> ${badge(STATUS_TEXT[c.status], STATUS_CLS[c.status])}
+       <span class="grow"></span><span class="muted">轮 ${c.current_round}</span></div>
+       <div class="muted">${esc(c.name)} · 记录 ${c.n_measurements} · 判定 ${c.n_runs}</div>
+     </div>`).join('');
+  box.querySelectorAll('.case-item').forEach(el =>
+    el.onclick = () => { selectedId = Number(el.dataset.id); refresh(); });
+}
+
+/* ------------------------------------------------------------ 详情 */
+function renderDetail(k) {
+  lastDetail = k;
+  const zrows = k.zones.map(z => {
+    const need = k.current_quota;
+    const enough = need !== null && z.count >= need;
+    return `<tr>
+      <td>${esc(z.zone_id)}</td><td>${esc(z.name)}</td>
+      <td class="num">[${fmt(z.lower)}, ${fmt(z.upper)}]</td>
+      <td class="num">${z.count}</td>
+      <td class="num">${need === null ? '—' : need}</td>
+      <td>${need === null ? '—' : (enough ? '<span class="ok">齐量 ✓</span>' : '<span class="bad">缺 ' + (need - z.count) + '</span>')}</td>
+    </tr>`;
+  }).join('');
+
+  const rrows = k.rounds.map(r =>
+    `<tr><td class="num">${r.round_no}</td><td class="num">${r.cumulative_n}</td>
+     <td class="num">${fmtA(r.alpha_round)}</td><td class="num">${fmtA(k.allocation.per_zone)}</td></tr>`
+  ).join('');
+
+  const runs = [...k.runs].reverse().map(run => {
+    const head = `<div class="run-head">
+        <b>第 ${run.round_no} 轮</b>
+        ${badge(run.status === 'SEALED' ? '已封存待算' : '已完成', run.status === 'SEALED' ? 'b-sealed' : 'b-open')}
+        ${run.decision ? badge(DEC_TEXT[run.decision], DEC_CLS[run.decision]) : ''}
+        <span class="muted">配额 ${run.quota} · 轮风险 α=${fmtA(run.alpha_round)} · 封存 ${esc(run.sealed_at)}</span>
+      </div>`;
+    let body = '';
+    if (run.result) {
+      body = `<div class="scroll"><table><thead><tr>
+          <th>温区</th><th class="num">n</th><th class="num">均值</th><th class="num">标准差</th>
+          <th class="num">α(温区)</th><th class="num">置信区间</th><th class="num">容差</th><th>落入</th>
+        </tr></thead><tbody>` +
+        run.result.zones.map(z => `<tr>
+          <td>${esc(z.zone_id)} ${esc(z.name)}</td>
+          <td class="num">${z.n}</td>
+          <td class="num">${fmt(z.mean)}</td>
+          <td class="num">${fmt(z.sd)}</td>
+          <td class="num">${fmtA(z.alpha)}</td>
+          <td class="num">[${fmt(z.ci_lo)}, ${fmt(z.ci_hi)}]</td>
+          <td class="num">[${fmt(z.lower)}, ${fmt(z.upper)}]</td>
+          <td>${z.within ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'}</td>
+        </tr>`).join('') + '</tbody></table></div>';
+    } else {
+      body = `<div class="muted">封存样本：${esc(JSON.stringify(run.snapshot_counts))}，等待计算/恢复。</div>`;
+    }
+    return `<div class="run">${head}${body}</div>`;
+  }).join('');
+
+  const mrows = k.measurements.map(m =>
+    `<tr><td>${esc(m.record_id)}</td><td>${esc(m.zone_id)}</td>
+     <td class="num">${fmt(m.value)}</td><td class="muted">${esc(m.ts)}</td></tr>`).join('');
+
+  const open = k.status === 'OPEN';
+  $('#detail').innerHTML = `
+    <section class="card">
+      <div class="row">
+        <h2 style="margin:0">${esc(k.code)} · ${esc(k.name)}</h2>
+        ${badge(STATUS_TEXT[k.status], STATUS_CLS[k.status])}
+        <span class="grow"></span>
+        <span class="muted">建案 ${esc(k.created_at)}${k.decided_at ? ' · 定案 ' + esc(k.decided_at) : ''}</span>
+      </div>
+      <div class="hint" style="margin-top:6px">
+        整案误放风险上限 α=${fmtA(k.overall_risk)}；当前第 ${k.current_round}/${k.total_rounds} 轮。
+        ${esc(k.allocation.note)}。
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>风险分配与轮次计划</h2>
+      <div class="scroll"><table><thead>
+        <tr><th class="num">轮次</th><th class="num">累计样本量/温区</th>
+            <th class="num">轮风险 α<sub>轮</sub></th><th class="num">温区风险 α<sub>轮,区</sub></th></tr>
+      </thead><tbody>${rrows}</tbody></table></div>
+      <div class="hint">各轮 × 各温区风险之和 = ${k.total_rounds} × ${k.zones.length} × ${fmtA(k.allocation.per_zone)}
+        = ${fmtA(k.total_rounds * k.zones.length * k.allocation.per_zone)} ≈ 整案上限 ${fmtA(k.overall_risk)}（并集界）。</div>
+    </section>
+
+    <section class="card">
+      <h2>温区与齐量进度</h2>
+      <div class="scroll"><table><thead>
+        <tr><th>编号</th><th>名称</th><th class="num">容差</th>
+            <th class="num">已报数</th><th class="num">本轮需求</th><th>状态</th></tr>
+      </thead><tbody>${zrows}</tbody></table></div>
+    </section>
+
+    <section class="card">
+      <h2>补报测量记录</h2>
+      ${open ? `
+      <div class="hint">每行一条：<code>编号,温区编号,值</code>。编号案件内唯一；同编号同内容重报幂等，同编号不同内容拒绝。</div>
+      <textarea id="rep-text" rows="5" placeholder="R-001,LOW,0.12&#10;R-002,MID,-0.08"></textarea>
+      <div class="row" style="margin-top:6px">
+        <button id="rep-btn">补报</button>
+        <span class="grow"></span>
+        <span class="hint">留空编号可自动生成，如 <code>,LOW,0.12</code></span>
+      </div>
+      <div class="msg" id="rep-msg"></div>` :
+      `<div class="muted">案件已定案（${esc(STATUS_TEXT[k.status])}），拒绝补报。</div>`}
+    </section>
+
+    <section class="card">
+      <h2>判定</h2>
+      <div class="row">
+        <button id="judge-btn" ${open ? '' : 'disabled'}>判定本轮</button>
+        ${k.sealed_pending ? '<button class="warn" id="resume-btn">恢复被封存的判定</button>' : ''}
+        <span class="hint">齐量后封存当前读数再计算；并发补报不影响本次裁决；中断可恢复，重试不新增风险额度。</span>
+      </div>
+      <div class="msg" id="judge-msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>判定历史（每轮区间与风险）</h2>
+      ${runs || '<span class="muted">尚无判定。</span>'}
+    </section>
+
+    <section class="card">
+      <details><summary>测量记录（${k.measurements.length} 条）</summary>
+        <div class="scroll"><table><thead>
+          <tr><th>编号</th><th>温区</th><th class="num">值</th><th>时间</th></tr>
+        </thead><tbody>${mrows}</tbody></table></div>
+      </details>
+    </section>`;
+
+  if (open) $('#rep-btn').onclick = submitReport;
+  const jb = $('#judge-btn');
+  if (jb) jb.onclick = doJudge;
+  const rb = $('#resume-btn');
+  if (rb) rb.onclick = doResume;
+}
+
+async function loadDetail(id) {
+  const k = await api('/api/cases/' + id);
+  renderDetail(k);
+}
+
+/* ------------------------------------------------------------ 动作 */
+async function submitReport() {
+  const msg = $('#rep-msg');
+  msg.className = 'msg'; msg.textContent = '';
+  const lines = $('#rep-text').value.split('\n').map(s => s.trim()).filter(Boolean);
+  if (!lines.length) { msg.className = 'msg err'; msg.textContent = '请输入记录'; return; }
+  const records = [];
+  for (const [i, line] of lines.entries()) {
+    const parts = line.split(/[,，\t]/).map(s => s.trim());
+    if (parts.length !== 3) {
+      msg.className = 'msg err';
+      msg.textContent = `第 ${i + 1} 行格式应为：编号,温区,值`;
+      return;
+    }
+    const [rid, zid, val] = parts;
+    records.push({record_id: rid || undefined, zone_id: zid, value: Number(val)});
+  }
+  try {
+    const r = await api(`/api/cases/${selectedId}/measurements`, 'POST', {records});
+    const tally = {};
+    for (const x of r.results) tally[x.status] = (tally[x.status] || 0) + 1;
+    const bad = r.results.filter(x => x.status === 'conflict' || x.status === 'invalid');
+    msg.textContent = '结果：' + Object.entries(tally).map(([k, v]) => `${k}×${v}`).join('，') +
+      (bad.length ? '\n' + bad.map(x => `${x.record_id}: ${x.status} ${x.reason || ''}`).join('\n') : '');
+    if (bad.length) msg.className = 'msg err';
+    $('#rep-text').value = '';
+    await refresh();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = e.message;
+  }
+}
+
+function judgeText(r) {
+  if (r.outcome === 'insufficient')
+    return `样本不足：第 ${r.round} 轮每温区需 ${r.quota} 条，缺口 ` +
+      Object.entries(r.shortfall).map(([z, n]) => `${z} 缺 ${n}`).join('，');
+  if (r.outcome === 'decided') return `案件已定案（${STATUS_TEXT[r.status]}）。`;
+  if (r.outcome === 'completed') {
+    const run = r.run, res = run.result;
+    const zs = res.zones.map(z =>
+      `${z.zone_id} [${fmt(z.ci_lo)}, ${fmt(z.ci_hi)}] ${z.within ? '✓' : '✗'}`).join('；');
+    return `第 ${run.round_no} 轮判定：${DEC_TEXT[run.decision]}（α轮=${fmtA(res.alpha_round)}，α温区=${fmtA(res.alpha_zone)}）\n${zs}` +
+      (r.replayed ? '\n（重试回放：同一封存读数，未新增风险额度）' : '');
+  }
+  return JSON.stringify(r);
+}
+
+async function doJudge() {
+  const msg = $('#judge-msg');
+  msg.className = 'msg'; msg.textContent = '判定中…';
+  try {
+    const r = await api(`/api/cases/${selectedId}/judge`, 'POST');
+    msg.textContent = judgeText(r);
+    await refresh();
+  } catch (e) {
+    msg.className = 'msg err'; msg.textContent = e.message;
+  }
+}
+
+async function doResume() {
+  const msg = $('#judge-msg');
+  msg.className = 'msg'; msg.textContent = '恢复中…';
+  try {
+    const r = await api(`/api/cases/${selectedId}/resume`, 'POST');
+    msg.textContent = r.resumed.length
+      ? `已按封存读数恢复 ${r.resumed.length} 个判定运行（重试不新增风险额度）。`
+      : '没有待恢复的封存判定。';
+    await refresh();
+  } catch (e) {
+    msg.className = 'msg err'; msg.textContent = e.message;
+  }
+}
+
+/* ------------------------------------------------------------ 刷新 */
+async function refresh() {
+  await loadList();
+  if (selectedId !== null) {
+    try { await loadDetail(selectedId); }
+    catch (e) { /* 案件可能被删，忽略 */ }
+  }
+}
+refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, 3000);
+</script>
+</body>
+</html>

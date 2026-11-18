@@ -40,5 +40,11 @@ COMPOSE_PROJECT_NAME=sensor-bootstrap；FRONTEND_PORT=18206；BACKEND_PORT=19206
 所有数据为固定随机种子生成的模拟业务数据，不能作为实际生产决策证据。项目独立算法、输入边界及业务局限详见 BUSINESS.md。测试与截图统一存放 ../../test-artifacts/gb-1007/，源码不含日志/截图/测试报告。
 清理本项目演示数据：`docker compose down -v --remove-orphans`（会删除本项目命名卷）。
 
+## 附：calibseq 校准分组序贯判定
+
+`calibseq/` 为独立的校准序贯判定子系统（仅标准库，离线可运行）：开案固定各温区容差、
+每轮累计样本量与整案误放风险上限，按轮补报、齐量判定、封存读数裁决、中断可恢复。
+运行 `python3 -m calibseq.server --port 8000`，详见 [calibseq/README.md](calibseq/README.md)。
+
 ## License
 MIT，见 LICENSE。
